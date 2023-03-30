@@ -1,0 +1,389 @@
+---
+title: "SHARK phytoplankton indicator pre-script"
+author: "Anders Torstensson"
+date: '2023-03-20'
+knit: (function(inputFile, encoding) {
+                        rmarkdown::render(inputFile,
+                        encoding=encoding, 
+                        output_file="../docs/shark_pythoplankton_indicator.html") })
+params:
+  shark_data_file: "Släggö.txt" # Your shark file
+  parameter: "Carbon concentration" # Either "Abundance", "Carbon concentration" or "Biovolume concentration"
+  year_test: !r c(2007:2014)
+  year_ref: !r c(2002:2007)
+output: html_document
+---
+
+## R Markdown script to tranform an SHARK export file
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+The script reads a SHARKweb phytoplankton data file (downloaded at https://sharkweb.smhi.se/hamta-data/) and prepares data for the **Helcom candidate indicator script** written by Joanna Calkiewicz & Janina Kownacka according to the document 'Seasonal succession of dominating phytoplankton groups'. The indicator focuses on the phytoplankton groups dinoflagellates (mixotrophic and autotrophic), cyanobacteria, diatoms and the species Mesodinium rubrum. The **Helcom candidate indicator script** is called after data wrangling and identification of reference period.
+
+The script groups taxa based on taxonomic level, and aggregates biomass data (in ug/l or um3/l, choose parameter above) for diatoms, cyanobacteria, autotrophic/mixotrophic dinoflagellates and for the ciliate species Mesodinium rubrum. Monthly means are calculated if the station was sampled multiple times during a month. 
+
+A five year reference period is identified by the lowest moving average of the yearly standard deviation of phytoplankton biomass. Test years are defined under params (above).
+
+The script inputs are the following:
+
+***"data/raw_data/sharkweb_data.txt"*** - A Phytoplankton data file downloaded from SHARKweb, using internal names, point/tab separation, win line breaks, win-1252 format.
+
+The script outputs are the following:
+
+**docs/shark_indicator.html** - Summary of the script output
+
+**data/processed_data/shark_data.csv** - Data file that can be read in the Helcom candidate indicator script.
+
+**plots/plots.png** - Time series plots for the total phytoplankton biomass, and for each taxonomic group. Can be used to manually select the ref/test period in the Helcom candidate indicator script, and to identify outliers that may need manual attention before data are processed by the indicator script.
+
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(vroom)
+library(knitr) # For html table reports
+library(kableExtra) # For html table reports
+
+downloadDir = "../data/raw_data"
+outputDir = "../data/processed_data"
+plotsDir = "../plots"
+docsDir = "../docs"
+
+if (!dir.exists(downloadDir)){
+  dir.create(downloadDir)
+}
+
+if (!dir.exists(outputDir)){
+  dir.create(outputDir)
+}
+
+if (!dir.exists(plotsDir)){
+    dir.create(plotsDir)
+}
+if (!dir.exists(docsDir)){
+    dir.create(docsDir)
+}
+```
+
+## Read SHARK data file
+
+```{r read_data, echo=FALSE}
+shark_data = vroom(file.path(downloadDir, params$shark_data_file), delim = "\t", locale = locale(encoding = "windows-1252")) %>%
+  select(visit_year,
+         station_name,
+         sample_location_id,
+         station_id,
+         sample_project_name_sv,
+         shark_sample_id_md5,
+         sample_date,
+         sample_latitude_dm,
+         sample_longitude_dm,
+         sample_latitude_dd,
+         sample_longitude_dd,
+         sample_min_depth_m,
+         sample_max_depth_m,
+         sampling_laboratory_name_sv,
+         scientific_name,
+         species_flag_code,
+         dyntaxa_id,
+         aphia_id,
+         parameter,
+         value,
+         unit,
+         trophic_type_code,
+         size_class,
+         location_water_category,
+         location_water_district,
+         location_svar_sea_area_name,
+         location_sea_basin,
+         location_helcom_ospar_area,
+         station_viss_eu_id,
+         taxon_kingdom,
+         taxon_phylum,
+         taxon_class,
+         taxon_order,
+         taxon_family,
+         taxon_genus,
+         taxon_species
+         )
+```
+
+## Filter biomass data for selected phytoplankton groups, parameter type and water category (offshore/coastal)
+
+E.g. diatoms, cyanobacteria, autotrophic/mixotrophic dinoflagellates and for the species Mesodinium rubrum. Only surface samples (min depth = 0) are selected.
+
+```{r selecttaxa, echo = FALSE}
+biomass_data = shark_data %>%
+  filter(parameter == params$parameter) %>%
+  filter(sample_min_depth_m == 0)
+
+selected_data = shark_data %>%
+  filter(parameter == params$parameter) %>%
+  filter(taxon_phylum %in% c("Bacillariophyta", "Cyanobacteria") |
+           scientific_name == "Mesodinium rubrum" |
+           taxon_phylum == "Miozoa" & trophic_type_code %in% c("AU","MX")) %>%
+  filter(sample_min_depth_m == 0)
+
+print(paste("Dataset has", 
+            paste(length(selected_data$value)), 
+            "datapoints between", 
+            min(selected_data$visit_year), 
+            "and", 
+            max(selected_data$visit_year), 
+            "containing the selected taxa.", 
+            paste0(params$parameter, " (", unique(selected_data$unit), ")") ,
+            "data will be aggregated for each sample", 
+            sep=" "))
+```
+
+## Aggregate biomass data for each sample, class and date
+
+Groups are renamed to names of choice (e.g. Diatoms, Dinoflagellates) and the data table is converted to be compatible with the Helcom candidate indicator script.
+
+```{r aggregate, echo = FALSE}
+data_all = selected_data %>%
+  group_by(visit_year,
+           station_name, 
+           sample_date, 
+           taxon_phylum) %>%
+  summarise("biomass" = sum(value)) %>%
+  mutate_all(str_replace_all, "Bacillariophyta", "Diatoms") %>% 
+  mutate_all(str_replace_all, "Miozoa", "Dinoflagellates") %>% 
+  mutate_all(str_replace_all, "Ciliophora", "Mesodinium rubrum") %>%
+  mutate("month" = month(sample_date)) %>%
+  rename("taxa" = taxon_phylum,
+         "year" = visit_year,
+         "station" = station_name,
+         "date" = sample_date) %>% 
+  arrange(year, month) %>%
+  relocate(station, date, year, month) %>%
+  mutate_at(vars(biomass, year, month), ~as.numeric(as.character(.))) 
+
+totals = data_all %>%
+  group_by(year,
+           station, 
+           date) %>%
+  summarise("biomass" = sum(biomass)) %>%
+  mutate(taxa = "Selected",
+         "month" = month(date))
+
+data_all = rbind(data_all,totals) %>%
+  arrange(date)
+
+# Calculate mean for each station and month
+
+data_all = data_all %>%
+  group_by(station,
+           year,
+           month,
+           taxa) %>%
+  summarise("biomass" = mean(biomass))
+
+all_biomass_data = biomass_data %>%
+  group_by(visit_year,
+           station_name, 
+           sample_date) %>%
+  summarise("biomass" = sum(value)) %>%
+  # mutate_all(str_replace_all, "Bacillariophyta", "Diatoms") %>% 
+  # mutate_all(str_replace_all, "Miozoa", "Dinoflagellates") %>% 
+  # mutate_all(str_replace_all, "Ciliophora", "Mesodinium rubrum") %>%
+  mutate("month" = month(sample_date)) %>%
+  rename("year" = visit_year,
+         "station" = station_name,
+         "date" = sample_date) %>% 
+  arrange(year, month) %>%
+  relocate(station, date, year, month) %>%
+  mutate_at(vars(biomass, year, month), ~as.numeric(as.character(.))) 
+```
+
+## Plot biomass time series data for all phytoplankton, for selecting relevant test and reference years
+
+```{r plot_all_biomass, echo = FALSE}
+
+## Mean for the whole phytoplankton community
+
+data_plot = all_biomass_data %>%
+  group_by(year) %>%
+  summarise(mean = mean(biomass),
+            sd = sd(biomass)) %>%
+  # mutate("date" = ISOdate(year,month, "1")) %>%
+  # mutate("date" = as.Date(date)) %>%
+  ungroup() %>%
+  mutate("rolling_mean" = frollmean(mean, 5, align = "center"),
+         "rolling_sd" = frollmean(sd, 5, align = "center"))
+
+title = "All_taxa_yearly_mean.jpg"
+main_title = paste("Yearly average", paste0(tolower(params$parameter)), "of all phytoplankton taxa")
+
+p <- ggplot() + 
+  geom_point(aes(x=year, y=mean), data_plot,size=2) +
+  geom_line(aes(x=year, y = rolling_mean, colour = "5-year moving average"), data_plot, na.rm = TRUE) +
+  ggtitle(main_title) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        plot.title = element_text(size=10),
+        legend.position="bottom",
+        legend.title = element_blank()) +
+  labs(y = paste0(params$parameter, " (", unique(selected_data$unit), "), mean"),
+       x = "Year") +
+  scale_x_continuous(breaks = seq(min(data_plot$year), max(data_plot$year), 1))
+
+plot(p)
+
+ggsave(file.path(plotsDir, paste(title)))
+
+
+## Standard deviation of all phytoplankton taxa
+
+stabile_year = data_plot %>%
+  filter(rolling_sd == min(rolling_sd, na.rm = TRUE))
+
+title = "All_taxa_yearly_sd.jpg"
+main_title = paste("Yearly standard deviation", paste0(tolower(params$parameter)), "of all phytoplankton taxa")
+
+p <- ggplot() + 
+  geom_point(aes(x=year, y=sd), data_plot,size=2) +
+  geom_line(aes(x=year, y = rolling_sd, colour = "5-year moving average"), data_plot, na.rm = TRUE) +
+  ggtitle(main_title) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        plot.title = element_text(size=10),
+        legend.position="bottom",
+        legend.title = element_blank()) +
+  labs(y = paste0(params$parameter, " (", unique(selected_data$unit), "), sd"),
+       x = "Year") +
+  geom_vline(xintercept = stabile_year$year-2, colour="blue") +
+  geom_vline(xintercept = stabile_year$year+2, colour="blue") +
+  scale_x_continuous(breaks = seq(min(data_plot$year), max(data_plot$year), 1))
+
+plot(p)
+
+ggsave(file.path(plotsDir, paste(title)))
+
+paste0("The most stable 5-year period of ", paste0(tolower(params$parameter)), " data identified between ", stabile_year$year-2, "-", stabile_year$year+2, ", for all taxa")
+
+years_all_taxa = c((stabile_year$year-2):(stabile_year$year+2))
+```
+
+
+
+## Plot biomass time series data for the selected taxa, for selecting relevant test and reference years
+
+```{r plot_selected_biomass, echo = FALSE}
+
+## Mean of the selected phytoplankton taxa
+
+data_selected_plot = data_all %>%
+  filter(!taxa == "Selected") %>%
+  group_by(year) %>%
+  summarise(mean = mean(biomass),
+            sd = sd(biomass)) %>%
+  ungroup() %>%
+  mutate("rolling_mean" = frollmean(mean, 5, align = "center"),
+         "rolling_sd" = frollmean(sd, 5, align = "center"))
+
+## Standard deviation of the selected phytoplankton taxa
+
+stabile_year = data_selected_plot %>%
+  filter(rolling_sd == min(rolling_sd, na.rm = TRUE))
+
+title = "Selected_taxa_yearly_sd.jpg"
+main_title = paste("Yearly standard deviation", paste0(tolower(params$parameter)), "of all selected phytoplankton taxa")
+
+p <- ggplot() + 
+  geom_point(aes(x=year, y=sd), data_selected_plot,size=2) +
+  geom_line(aes(x=year, y = rolling_sd, colour = "5-year moving average"), data_selected_plot, na.rm = TRUE) +
+  ggtitle(main_title) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        plot.title = element_text(size=10),
+        legend.position="bottom",
+        legend.title = element_blank()) +
+  labs(y = paste0(params$parameter, " (", unique(selected_data$unit), "), sd"),
+       x = "Year") +
+  geom_vline(xintercept = stabile_year$year-2, colour="blue") +
+  geom_vline(xintercept = stabile_year$year+2, colour="blue") +
+  scale_x_continuous(breaks = seq(min(data_selected_plot$year), max(data_selected_plot$year), 1))
+
+plot(p)
+
+ggsave(file.path(plotsDir, paste(title)))
+
+paste0("The most stable 5-year period of ", paste0(tolower(params$parameter)), " data identified between ", stabile_year$year-2, "-", stabile_year$year+2, ", for selected taxa")
+
+years_selected_taxa = c((stabile_year$year-2):(stabile_year$year+2))
+```
+
+
+## Plot biomass time series data for each taxonomic group, for selecting relevant test and reference years
+
+```{r plottaxa, echo = FALSE}
+for (i in 1:length(unique(data_all$taxa))) {
+  data_all_taxa <- filter(data_all, taxa == unique(data_all$taxa)[i]) 
+  name_all_taxa <- unique(data_all$taxa)[i]
+  
+data_all_taxa$date <- as.Date(paste(data_all_taxa$year, data_all_taxa$month, "15", sep = "-"))
+
+title <- paste(name_all_taxa, ".jpg", sep = "")
+main_title <- paste(name_all_taxa)
+
+p <- ggplot() + 
+  geom_point(aes(x=date, y=biomass),data_all_taxa,size=2) +
+  ggtitle(main_title) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        plot.title = element_text(size=10)) +
+  labs(y = paste0(params$parameter, " (", unique(selected_data$unit), ")"),
+       x = "Date") +
+  scale_x_date(date_labels = "%Y",
+               date_breaks = "1 years")
+
+plot(p)
+
+ggsave(file.path(plotsDir, paste(title)))
+}
+```
+
+## Save file to output
+
+shark_data.csv can be imported in the Helcom candidate indicator script. The full list is also printed below, together with a summary of number of visits per station.
+
+```{r savefiles, echo = FALSE}
+write.table(data_all, file.path(outputDir, "shark_data.csv"), sep=';', dec=',')
+
+data_all$biomass <- as.character(data_all$biomass)
+
+data_all %>%
+  kable(digits = 3) %>%
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "1000px", height = "1000px")
+
+data_all %>%
+  group_by(station) %>%
+  summarise("number of sampling months" = length(unique(paste(year, month, sep = "-")))) %>%
+  arrange(desc(`number of sampling months`)) %>%
+  kable(digits = 3) %>%
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "1000px", height = "1000px")
+```
+
+
+### Run M1 script
+
+```{r run_M1_script}
+years_ref = params$year_ref #You can choose reference years
+years_test = params$year_test #You can choose test years
+
+spin_child('M1_eng.R')
+```
+
+
+### Reproducibility
+
+```{r reproducibility}
+# Date time
+Sys.time()
+# Here we store the session info for this script
+sessioninfo::session_info()
+```
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

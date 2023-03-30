@@ -1,0 +1,5 @@
+The script reads a SHARKweb phytoplankton data file (downloaded at https://sharkweb.smhi.se/hamta-data/) and prepares data for the **Helcom candidate indicator script** written by Joanna Calkiewicz & Janina Kownacka according to the document 'Seasonal succession of dominating phytoplankton groups'. The indicator focuses on the phytoplankton groups dinoflagellates (mixotrophic and autotrophic), cyanobacteria, diatoms and the species Mesodinium rubrum. The **Helcom candidate indicator script** is called after data wrangling and identification of reference period.
+
+The script groups taxa based on taxonomic level, and aggregates biomass data (in ug/l or um3/l, choose parameter above) for diatoms, cyanobacteria, autotrophic/mixotrophic dinoflagellates and for the ciliate species Mesodinium rubrum. Monthly means are calculated if the station was sampled multiple times during a month. 
+
+A five year reference period is identified by the lowest moving average of the yearly standard deviation of phytoplankton biomass. Test years are defined under params (above).
