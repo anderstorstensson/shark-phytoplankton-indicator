@@ -7,10 +7,14 @@ knit: (function(inputFile, encoding) {
                         encoding=encoding, 
                         output_file="../docs/shark_pythoplankton_indicator.html") })
 params:
-  shark_data_file: "Släggö.txt" # Your shark file
+  shark_data_file: "a17.txt" # Your shark file
   parameter: "Carbon concentration" # Either "Abundance", "Carbon concentration" or "Biovolume concentration"
   year_test: !r c(2007:2014)
   year_ref: !r c(2002:2007)
+  include_diatoms: TRUE # TRUE or FALSE
+  include_dinoflagellates: TRUE # TRUE or FALSE
+  include_cyanobacteria: TRUE # TRUE or FALSE
+  include_mesodinium_rubrum: TRUE # TRUE or FALSE
 output: html_document
 ---
 
@@ -67,6 +71,12 @@ if (!dir.exists(plotsDir)){
 if (!dir.exists(docsDir)){
     dir.create(docsDir)
 }
+
+
+diatoms = ifelse(params$include_diatoms, "Bacillariophyta", "empty")
+dinoflagellates = ifelse(params$include_dinoflagellates, "Miozoa", "empty")
+mesodinium = ifelse(params$include_mesodinium_rubrum, "Mesodinium rubrum", "empty")
+cyanobacteria = ifelse(params$include_cyanobacteria, "Cyanobacteria", "empty")
 ```
 
 ## Read SHARK data file
@@ -123,9 +133,9 @@ biomass_data = shark_data %>%
 
 selected_data = shark_data %>%
   filter(parameter == params$parameter) %>%
-  filter(taxon_phylum %in% c("Bacillariophyta", "Cyanobacteria") |
-           scientific_name == "Mesodinium rubrum" |
-           taxon_phylum == "Miozoa" & trophic_type_code %in% c("AU","MX")) %>%
+  filter(taxon_phylum %in% c(diatoms, cyanobacteria) |
+           scientific_name == mesodinium |
+           taxon_phylum == dinoflagellates & trophic_type_code %in% c("AU","MX")) %>%
   filter(sample_min_depth_m == 0)
 
 print(paste("Dataset has", 
